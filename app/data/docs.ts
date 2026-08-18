@@ -451,11 +451,11 @@ const {
 
 ## Standard Login Flow
 
-The `login()` method submits your credentials to Nuxt's local endpoint `/api/auth/login`. You can pass any standard credential payload naturally — such as `{ email, password }`, `{ username, password }`, `{ phone, password }`, `{ mobile, password }`, or `{ identifier, password }`.
+The \`login()\` method submits your credentials to Nuxt's local endpoint \`/api/auth/login\`. You can pass any standard credential payload naturally — such as \`{ email, password }\`, \`{ username, password }\`, \`{ phone, password }\`, \`{ mobile, password }\`, or \`{ identifier, password }\`.
 
-Nuxt validates that credentials are provided before forwarding the request to your backend `endpoints.login`, parses the bearer token, stores the session in Redis, sets an HTTP-only cookie on the client, and updates the reactive auth state.
+Nuxt validates that credentials are provided before forwarding the request to your backend \`endpoints.login\`, parses the bearer token, stores the session in Redis, sets an HTTP-only cookie on the client, and updates the reactive auth state.
 
-```typescript
+\`\`\`typescript
 const auth = useBearerAuth()
 
 async function submitLogin() {
@@ -473,7 +473,7 @@ async function submitLogin() {
     console.error('Login error:', auth.error.value)
   }
 }
-```
+\`\`\`
 
 ## Social Authentication
 
