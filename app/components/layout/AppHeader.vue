@@ -9,7 +9,7 @@ const config = useRuntimeConfig()
 const isCommandPaletteOpen = ref(false)
 const isMobileMenuOpen = ref(false)
 const isScrolled = ref(false)
-const moduleVersion = computed(() => String(config.public.moduleVersion || ''))
+const moduleVersion = computed(() => String(config.public.moduleVersion || 'v0.1.4'))
 
 function onScroll() {
   isScrolled.value = window.scrollY > 10
@@ -53,8 +53,8 @@ onUnmounted(() => {
             <span class="font-bold text-base tracking-tight text-white group-hover:text-emerald-400 transition-colors">
               Nuxt Bearer Auth
             </span>
-            <span v-if="moduleVersion" class="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono uppercase bg-emerald-950/60 text-emerald-400 rounded border border-emerald-800/60">
-              v{{ moduleVersion ?? '0.1.4'}}
+            <span class="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono uppercase bg-emerald-950/60 text-emerald-400 rounded border border-emerald-800/60">
+              v{{ moduleVersion }}
             </span>
           </div>
         </NuxtLink>
