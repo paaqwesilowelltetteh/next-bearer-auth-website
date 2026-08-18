@@ -1,7 +1,34 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+function resolveModuleVersion() {
+  if (process.env.NUXT_PUBLIC_MODULE_VERSION) {
+    return process.env.NUXT_PUBLIC_MODULE_VERSION
+  }
+
+  try {
+    const packageJson = JSON.parse(
+      readFileSync(resolve('../nuxt-bearer-auth/package.json'), 'utf-8'),
+    )
+
+    return packageJson.version || ''
+  } catch {
+    return ''
+  }
+}
+
+const moduleVersion = resolveModuleVersion()
+
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: false },
+
+  runtimeConfig: {
+    public: {
+      moduleVersion,
+    },
+  },
 
   modules: [
     '@nuxtjs/tailwindcss',
@@ -51,6 +78,11 @@ export default defineNuxtConfig({
 
   typescript: {
     strict: true,
+    tsConfig: {
+      compilerOptions: {
+        types: ['node'],
+      },
+    },
   },
 
   nitro: {
