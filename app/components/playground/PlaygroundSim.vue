@@ -63,7 +63,7 @@ function addLog(message: string, level: LogEntry['level'] = 'info') {
 async function simulateLogin() {
   isSimulating.value = true
   status.value = 'loading'
-  addLog('[Browser] Initiating POST /api/auth/login with identifier="' + inputEmail.value + '"', 'action')
+  addLog('[Browser] Initiating POST /api/auth/login with email="' + inputEmail.value + '"', 'action')
 
   await new Promise((r) => setTimeout(r, 400))
   addLog('[Nuxt Server] Forwarding credentials to https://api.example.com/auth/login...', 'info')
@@ -209,7 +209,7 @@ async function simulateLogout() {
           <div class="py-4 space-y-4">
             <div v-if="!isAuthenticated" class="space-y-3">
               <div>
-                <label class="block text-xs font-mono text-gray-400 mb-1">Email Identifier</label>
+                <label class="block text-xs font-mono text-gray-400 mb-1">Email / Username / Identifier</label>
                 <input
                   v-model="inputEmail"
                   type="email"

@@ -9,7 +9,7 @@ async function handleLogin(email: string, pass: string) {
   // 3. Nuxt receives bearer token and stores it in Redis
   // 4. Browser receives an HTTP-only session cookie
   await auth.login({
-    identifier: email,
+    email,
     password: pass,
   })
 

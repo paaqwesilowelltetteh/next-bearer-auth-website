@@ -169,7 +169,7 @@ async function handleLogin() {
   try {
     // Calls /api/auth/login -> authenticates with backend -> stores token in Redis -> sets session cookie
     await auth.login({
-      identifier: email.value,
+      email: email.value, // accepts email, username, phone, mobile, or identifier
       password: password.value,
     })
     // Upon success, user is automatically redirected to redirects.authenticated ('/dashboard')
@@ -451,15 +451,17 @@ const {
 
 ## Standard Login Flow
 
-The \`login()\` method submits your credentials to Nuxt's local endpoint \`/api/auth/login\`. Nuxt forwards the request to your backend \`endpoints.login\`, parses the bearer token, stores the session in Redis, sets an HTTP-only cookie on the client, and updates the reactive auth state.
+The `login()` method submits your credentials to Nuxt's local endpoint `/api/auth/login`. You can pass any standard credential payload naturally — such as `{ email, password }`, `{ username, password }`, `{ phone, password }`, `{ mobile, password }`, or `{ identifier, password }`.
 
-\`\`\`typescript
+Nuxt validates that credentials are provided before forwarding the request to your backend `endpoints.login`, parses the bearer token, stores the session in Redis, sets an HTTP-only cookie on the client, and updates the reactive auth state.
+
+```typescript
 const auth = useBearerAuth()
 
 async function submitLogin() {
   try {
     const response = await auth.login({
-      identifier: 'user@example.com', // email, username, or phone
+      email: 'user@example.com', // Accepts email, username, phone, mobile, or identifier
       password: 'mypassword',
     })
 
@@ -471,7 +473,7 @@ async function submitLogin() {
     console.error('Login error:', auth.error.value)
   }
 }
-\`\`\`
+```
 
 ## Social Authentication
 

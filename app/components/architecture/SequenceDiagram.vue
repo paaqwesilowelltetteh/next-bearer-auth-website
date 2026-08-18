@@ -11,7 +11,7 @@ const flows = {
     title: 'Login & Session Creation',
     description: 'User enters credentials. Nuxt authenticates with your backend API, receives the bearer token, stores it securely in Redis, and issues an HTTP-only cookie.',
     steps: [
-      { from: 'Browser', to: 'Nuxt Server', action: 'POST /api/auth/login { identifier, password }', detail: 'Local Nuxt API route' },
+      { from: 'Browser', to: 'Nuxt Server', action: 'POST /api/auth/login { email/username, password }', detail: 'Local Nuxt API route' },
       { from: 'Nuxt Server', to: 'Backend API', action: 'POST https://api.example.com/auth/login', detail: 'Direct server-to-server call' },
       { from: 'Backend API', to: 'Nuxt Server', action: '200 OK { token: "secret_bearer_token", user: {...} }', detail: 'Bearer token received on server' },
       { from: 'Nuxt Server', to: 'Redis', action: 'SETEX session:<uuid> 604800 { token, profile, ... }', detail: 'Stored in server memory with TTL' },
