@@ -9,7 +9,7 @@ const config = useRuntimeConfig()
 const isCommandPaletteOpen = ref(false)
 const isMobileMenuOpen = ref(false)
 const isScrolled = ref(false)
-const moduleVersion = computed(() => String(config.public.moduleVersion || 'v0.1.6'))
+const moduleVersion = computed(() => String(config.public.moduleVersion || 'v0.1.7'))
 
 function onScroll() {
   isScrolled.value = window.scrollY > 10
