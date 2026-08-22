@@ -35,7 +35,7 @@ export const docCategories: DocCategory[] = [
     title: 'Core Guides',
     items: [
       { slug: 'authentication', title: 'Authentication Flows', description: 'Login, registration, social auth, OTP verification, and password resets.' },
-      { slug: 'sessions', title: 'Session Management', description: 'Redis session storage, TTL expiration, active devices, and remote revocation.' },
+      { slug: 'sessions', title: 'Session Management', description: 'Redis session storage, sliding TTL expiration, active devices, and remote revocation.' },
       { slug: 'ssr', title: 'SSR & Hydration', description: 'Server-side rendering auth state, payload hydration, and route guards.' },
       { slug: 'security', title: 'Security Architecture', description: 'HTTP-only cookies, token isolation, CSRF protection, and production checklist.' },
     ]
@@ -43,7 +43,7 @@ export const docCategories: DocCategory[] = [
   {
     title: 'Reference & Recipes',
     items: [
-      { slug: 'api', title: 'API & Composable Reference', description: 'Complete useBearerAuth() methods, types, and server-side utilities.' },
+      { slug: 'api', title: 'API & Composable Reference', description: 'Complete useBearerAuth() methods, types, server-side utilities, and public type exports.' },
       { slug: 'customization', title: 'Customization & Response Mapping', description: 'Adapting to custom backend response shapes, custom cookies, and hooks.' },
       { slug: 'examples', title: 'Cookbook & Integration Examples', description: 'Step-by-step examples for Laravel Sanctum, custom Node/Go APIs, and SSR dashboards.' },
     ]
@@ -99,11 +99,11 @@ Before installing the module, ensure your environment meets the following:
 Install \`nuxt-bearer-auth\`, \`redis\` client, and \`nuxt-csurf\` (for CSRF protection) using your package manager:
 
 \`\`\`bash
-# Using pnpm (recommended)
-pnpm add nuxt-bearer-auth redis nuxt-csurf
-
 # Using npm
 npm install nuxt-bearer-auth redis nuxt-csurf
+
+# Using pnpm
+pnpm add nuxt-bearer-auth redis nuxt-csurf
 
 # Using yarn
 yarn add nuxt-bearer-auth redis nuxt-csurf
@@ -121,7 +121,7 @@ export default defineNuxtConfig({
   bearerAuth: {
     apiBaseUrl: process.env.API_BASE_URL,
     redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
-    
+
     redirects: {
       login: '/login',
       authenticated: '/dashboard',
@@ -148,7 +148,7 @@ REDIS_URL=redis://127.0.0.1:6379
 APP_ENV=local
 \`\`\`
 
-> **Security Tip**: In production, ensure \`REDIS_URL\` uses password authentication or TLS (\`rediss://...\`) and is isolated within your private VPC network.
+> **Security Tip**: In production, ensure \`REDIS_URL\` uses password authentication or TLS (\`rediss://...\`) and is isolated within your private VPC network. Redis holds live session data including bearer tokens — treat it as sensitive infrastructure.
 
 ## Your First Login
 
@@ -165,7 +165,7 @@ const isSubmitting = ref(false)
 async function handleLogin() {
   isSubmitting.value = true
   errorMessage.value = ''
-  
+
   try {
     // Calls /api/auth/login -> authenticates with backend -> stores token in Redis -> sets session cookie
     await auth.login({
@@ -186,7 +186,7 @@ async function handleLogin() {
     <h1>Sign In</h1>
     <form @submit.prevent="handleLogin">
       <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
-      
+
       <label>Email Address</label>
       <input v-model="email" type="email" required autocomplete="email" />
 
@@ -328,6 +328,7 @@ export default defineNuxtConfig({
       maxAge: 60 * 60 * 24 * 7, // 7 days in seconds
       sameSite: 'lax',
       secure: undefined, // Defaults to true in production
+      domain: undefined, // Optional: set to '.example.com' for subdomain sharing
       path: '/',
     },
 
@@ -360,8 +361,8 @@ export default defineNuxtConfig({
 | :--- | :--- | :--- | :--- |
 | \`apiBaseUrl\` | \`string\` | \`""\` | Base URL of your backend bearer-token API. |
 | \`redisUrl\` | \`string\` | \`"redis://127.0.0.1:6379"\` | Redis connection URI. |
-| \`sessionSecret\` | \`string\` | \`""\` | Optional encryption / signing secret for sessions. |
-| \`appEnv\` | \`string\` | \`process.env.APP_ENV\` | Application environment name (\`local\`, \`development\`, \`production\`). |
+| \`sessionSecret\` | \`string\` | \`""\` | Reserved field for a future session signing or encryption secret. Currently accepted by the module but not used at runtime — sessions are stored as JSON in Redis without additional application-level encryption. See [Redis Security Hardening](/docs/security#redis-hardening) for how to secure Redis at the infrastructure level. |
+| \`appEnv\` | \`string\` | \`process.env.APP_ENV\` | Application environment name (\`local\`, \`development\`, \`production\`). Controls dev vs production cookie names and \`Secure\` attribute behaviour. |
 | \`installCsurf\` | \`boolean\` | \`true\` | Automatically registers \`nuxt-csurf\` module. |
 
 ## Endpoints Configuration
@@ -399,11 +400,14 @@ bearerAuth: {
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | \`name\` | \`string\` | \`"nuxt_bearer_auth_session"\` | Production cookie name. |
-| \`devName\` | \`string\` | \`"nuxt_bearer_auth_session_dev"\` | Development cookie name. |
-| \`maxAge\` | \`number\` | \`604800\` (7 days) | Session TTL in seconds in Redis and browser cookie. |
-| \`sameSite\` | \`"lax" \| "strict" \| "none"\` | \`"lax"\` | SameSite attribute for cookie. |
-| \`secure\` | \`boolean\` | auto (\`true\` in prod) | Requires HTTPS transmission. |
-| \`domain\` | \`string\` | \`undefined\` | Optional cookie domain for subdomains. |
+| \`devName\` | \`string\` | \`"nuxt_bearer_auth_session_dev"\` | Development cookie name (used when \`appEnv\` is \`local\` or \`development\`). |
+| \`maxAge\` | \`number\` | \`604800\` (7 days) | Session TTL in seconds. Applied to both the Redis key and the browser cookie. The session uses a **sliding expiration window** — authenticated activity resets this TTL back to the full \`maxAge\` value. |
+| \`sameSite\` | \`"lax" \| "strict" \| "none"\` | \`"lax"\` | SameSite attribute for the session cookie. |
+| \`secure\` | \`boolean\` | auto (\`true\` in prod) | Requires HTTPS transmission. Automatically \`true\` when \`NODE_ENV=production\` or \`appEnv=production\`. |
+| \`domain\` | \`string\` | \`undefined\` | Optional cookie domain. Set to \`.example.com\` to share the session across subdomains. |
+| \`path\` | \`string\` | \`"/"\` | Cookie path. |
+
+> **Note**: The \`HttpOnly\` flag is always set on the session cookie — it is hardcoded and not configurable. This ensures the session identifier can never be read by browser JavaScript.
     `
   },
 
@@ -540,12 +544,13 @@ Because both the access token and refresh token are stored in Redis on the serve
 const auth = useBearerAuth()
 
 // Triggers server-side call to backend endpoints.refresh
+// The refresh token is read from Redis — it is never sent to the browser
 await auth.refresh()
 \`\`\`
 
 ## Logout Flow
 
-Logging out destroys the Redis session key, deletes the session from the user's active session set, calls your backend's \`endpoints.logout\` (with the bearer token), clears client state, and deletes the browser cookie:
+The logout flow always destroys the local Redis session regardless of whether the remote backend logout call succeeds. This means even if your backend is temporarily unreachable, the Nuxt session is cleared and the cookie is deleted.
 
 \`\`\`typescript
 const auth = useBearerAuth()
@@ -555,18 +560,27 @@ async function handleLogout() {
   await auth.logout('/login')
 }
 \`\`\`
+
+The server-side sequence on logout:
+1. Calls your backend \`endpoints.logout\` with the bearer token.
+2. If the backend call fails, the error is logged as a warning — the logout continues regardless.
+3. Deletes the Redis session key (\`DEL session:<uuid>\`).
+4. Removes the session from the user's active sessions set (\`SREM user_sessions:<userId>\`).
+5. Clears the browser cookie.
+6. Clears client-side auth state.
     `
   },
 
   'sessions': {
     slug: 'sessions',
     title: 'Redis Session Architecture',
-    description: 'Deep dive into Redis session storage schema, TTL expiration, active devices, and remote revocation.',
+    description: 'Deep dive into Redis session storage schema, sliding TTL expiration, active devices, and remote revocation.',
     category: 'Core Guides',
     order: 4,
     sections: [
       { id: 'redis-storage-model', title: 'Redis Storage Model', level: 2 },
       { id: 'session-data-structure', title: 'Session Data Structure', level: 2 },
+      { id: 'sliding-ttl', title: 'Sliding Session Expiration', level: 2 },
       { id: 'active-sessions-index', title: 'User Sessions Index', level: 2 },
       { id: 'listing-sessions', title: 'Listing Active Sessions', level: 2 },
       { id: 'revoking-sessions', title: 'Revoking Remote Sessions', level: 2 },
@@ -579,7 +593,7 @@ async function handleLogout() {
 
 Two key patterns are used in Redis:
 
-1. **\`session:<session_uuid>\`** (String with TTL): Stores the JSON serialized session object.
+1. **\`session:<session_uuid>\`** (String with TTL): Stores the JSON-serialized session object.
 2. **\`user_sessions:<user_id>\`** (Set with TTL): Stores the list of active session UUIDs belonging to that user.
 
 \`\`\`
@@ -591,6 +605,9 @@ Two key patterns are used in Redis:
 │  ├── token: "eyJhbGciOiJIUzI1Ni..." (Bearer Token)          │
 │  ├── refreshToken: "d84f2c91..."                            │
 │  ├── profile: { name: "Enoch", email: "..." }               │
+│  ├── createdAt: "2025-01-15T10:30:00.000Z"                  │
+│  ├── expiresAt: 1737030600000  (epoch ms, application check)│
+│  ├── lastActivity: "2025-01-15T14:22:10.000Z"               │
 │  ├── userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X)"   │
 │  └── ipAddress: "192.168.1.50"                              │
 │                                                             │
@@ -600,41 +617,72 @@ Two key patterns are used in Redis:
 └─────────────────────────────────────────────────────────────┘
 \`\`\`
 
+Session data is stored as plain JSON in Redis. The session store itself is not application-level encrypted. See [Redis Security Hardening](/docs/security#redis-hardening) for infrastructure-level isolation recommendations.
+
 ## Session Data Structure
 
-Each session in Redis adheres to the TypeScript interface:
+Each session in Redis adheres to the following TypeScript interface. The full session type is exported from the package root:
 
 \`\`\`typescript
-export interface BearerAuthSession<User = BearerAuthUser> {
+import type { BearerAuthSession, PublicSession } from 'nuxt-bearer-auth'
+
+interface BearerAuthSession<User extends BearerAuthUser = BearerAuthUser> {
   userId: string
-  token: string
+  token: string           // Bearer token — stored server-side, never sent to browser
   refreshToken?: string | null
-  profile: User | null
-  createdAt: string      // ISO string
-  expiresAt: number      // Unix timestamp (ms)
-  lastActivity: string   // ISO string
-  userAgent?: string     // Request User-Agent header
-  ipAddress?: string     // Client IP address
+  profile: User | null    // User profile object hydrated from backend
+  createdAt: string       // ISO timestamp of session creation
+  expiresAt: number       // Epoch milliseconds — application-level expiry guard
+  lastActivity: string    // ISO timestamp — updated on every authenticated request
+  userAgent?: string      // Request User-Agent header at session creation
+  ipAddress?: string      // Client IP address at session creation
 }
-\`\`\`
 
-When a user makes any authenticated request, the session's \`lastActivity\` is updated and its Redis TTL is refreshed.
-
-## Listing Active Sessions
-
-You can build a "Manage Active Devices" UI by calling the built-in endpoint \`GET /api/auth/sessions\`:
-
-\`\`\`vue
-<script setup lang="ts">
-interface DeviceSession {
+// Safe shape returned to the browser — omits token, refreshToken, userId, expiresAt
+interface PublicSession {
   id: string
   createdAt: string
   lastActivity: string
   userAgent?: string
   ipAddress?: string
 }
+\`\`\`
 
-const { data: sessions, refresh } = await useFetch<DeviceSession[]>('/api/auth/sessions')
+> **Important**: The \`token\` and \`refreshToken\` fields are only ever stored in Redis on the Nuxt server. They are intentionally excluded from \`PublicSession\` and never included in any response to the browser.
+
+## Sliding Session Expiration
+
+Sessions use a **sliding expiration window**. Each time an authenticated request is made, the session's \`lastActivity\` timestamp is updated and the Redis TTL is reset to the full \`maxAge\` value.
+
+This means:
+- A session with a 7-day \`maxAge\` does not necessarily expire exactly 7 days after login.
+- An active user whose requests are processed regularly will maintain a valid session indefinitely, as each request restarts the 7-day window.
+- A session that has had no activity for the full \`maxAge\` period (7 days by default) will expire.
+
+\`\`\`
+Day 0:    Login       → session created, TTL = 7 days
+Day 3:    Request     → TTL reset to 7 days from now (expires Day 10)
+Day 9:    Request     → TTL reset to 7 days from now (expires Day 16)
+Day 16+:  No request  → session expires after idle for 7 days
+\`\`\`
+
+The session JSON also carries an \`expiresAt\` field (epoch milliseconds) that serves as an application-level double-check independent of the Redis TTL, guarding against any TTL drift.
+
+## User Sessions Index
+
+The \`user_sessions:<userId>\` Redis Set tracks all active session IDs for a given user. This enables multi-device session management — listing, inspecting, and remotely revoking individual sessions without affecting others.
+
+When a new session is created, its ID is added to this set. When a session is destroyed (logout, revocation, or TTL expiry cleanup), its ID is removed from the set.
+
+## Listing Active Sessions
+
+You can build a "Manage Active Devices" UI by calling the built-in endpoint \`GET /api/auth/sessions\`. The response shape is \`{ sessions: PublicSession[] }\`:
+
+\`\`\`vue
+<script setup lang="ts">
+import type { PublicSession } from 'nuxt-bearer-auth'
+
+const { data, refresh } = await useFetch<{ sessions: PublicSession[] }>('/api/auth/sessions')
 
 async function revokeSession(sessionId: string) {
   await $fetch(\`/api/auth/sessions/\${sessionId}\`, { method: 'DELETE' })
@@ -645,7 +693,7 @@ async function revokeSession(sessionId: string) {
 <template>
   <div class="sessions-list">
     <h3>Active Sessions</h3>
-    <div v-for="s in sessions" :key="s.id" class="session-card">
+    <div v-for="s in data?.sessions" :key="s.id" class="session-card">
       <div>
         <p class="font-bold">{{ s.userAgent || 'Unknown Device' }}</p>
         <p class="text-sm text-gray-400">Last active: {{ new Date(s.lastActivity).toLocaleString() }}</p>
@@ -659,11 +707,32 @@ async function revokeSession(sessionId: string) {
 
 ## Revoking Remote Sessions
 
-When a session is revoked:
-1. The \`DELETE /api/auth/sessions/:id\` endpoint checks that the current user owns that session ID.
+When a session is revoked via \`DELETE /api/auth/sessions/:id\`:
+
+1. The endpoint verifies the current user owns that session ID — a 403 is returned if there is a mismatch.
 2. Redis executes \`DEL session:<id>\`.
 3. Redis removes \`<id>\` from the \`user_sessions:<user_id>\` set using \`SREM\`.
-4. If that device sends a request later, Nuxt finds no session in Redis, deletes the invalid cookie, and returns a \`401 Unauthenticated\`.
+4. Any subsequent request from that device finds no session in Redis, the stale cookie is cleared, and a \`401 Unauthenticated\` is returned.
+
+## Revoke All Sessions
+
+To destroy every active session for a user (e.g. on a password change or security incident response), use the server-side utility \`destroyAllBearerAuthSessions\` in a custom Nitro handler:
+
+\`\`\`typescript
+// server/api/account/revoke-all-sessions.post.ts
+import { requireBearerAuthSession, destroyAllBearerAuthSessions } from '#imports'
+
+export default defineEventHandler(async (event) => {
+  const session = requireBearerAuthSession(event)
+
+  // Deletes every session key for this user and clears the user_sessions set
+  await destroyAllBearerAuthSessions(session.userId)
+
+  return { success: true, message: 'All sessions revoked' }
+})
+\`\`\`
+
+This performs a Redis pipeline that deletes all \`session:<id>\` keys for the user and then deletes the \`user_sessions:<userId>\` set in a single atomic operation.
     `
   },
 
@@ -676,6 +745,7 @@ When a session is revoked:
     sections: [
       { id: 'how-ssr-works', title: 'How SSR Works in Nuxt Bearer Auth', level: 2 },
       { id: 'server-plugin', title: 'The Server Plugin & Payload', level: 2 },
+      { id: 'payload-exposure', title: 'What the SSR Payload Exposes', level: 2 },
       { id: 'preventing-flicker', title: 'Zero Client Auth Flicker', level: 2 },
       { id: 'server-routes', title: 'Accessing Sessions in Server Routes', level: 2 },
       { id: 'ssr-guards', title: 'Server-Side Route Middleware', level: 2 },
@@ -697,7 +767,7 @@ In traditional client-side SPAs using localStorage, the server cannot know wheth
 2. Nuxt Server Plugin (bearer-auth.server.ts)
    - Reads session cookie from H3Event
    - Queries Redis: GET session:<id>
-   - Attaches user profile to nuxtApp.payload.bearerAuth
+   - Attaches { user: profile, status } to nuxtApp.payload.bearerAuth
                       │
                       ▼
 3. Nuxt Server-Side Renders HTML
@@ -712,7 +782,7 @@ In traditional client-side SPAs using localStorage, the server cannot know wheth
 
 ## The Server Plugin & Payload
 
-The package includes a dedicated server plugin (\`bearer-auth.server.ts\`):
+The package includes a dedicated server plugin (\`bearer-auth.server.ts\`) that runs once per SSR request:
 
 \`\`\`typescript
 // Inside nuxt-bearer-auth runtime server plugin
@@ -741,6 +811,28 @@ export default defineNuxtPlugin(async (nuxtApp) => {
 })
 \`\`\`
 
+## What the SSR Payload Exposes
+
+Understanding what is and is not included in the SSR payload is important for security and data handling.
+
+**Included in \`nuxtApp.payload.bearerAuth\` (sent to browser):**
+- \`user\` — the user profile object returned by your backend (e.g. \`{ id, name, email, role, ... }\`)
+- \`status\` — the authentication status string (\`"authenticated"\` or \`"unauthenticated"\`)
+
+**Stays server-side only (never sent to browser):**
+- \`token\` — the bearer token
+- \`refreshToken\` — the refresh token
+- \`userId\` — the internal user identifier
+- \`ipAddress\` — the client IP at session creation
+- \`userAgent\` — the user agent at session creation
+- \`createdAt\` / \`expiresAt\` / \`lastActivity\` — session lifecycle metadata
+
+> **Developer note**: The user profile object (\`session.profile\`) is serialized into the Nuxt SSR payload and becomes visible in the browser's hydration data. Avoid including highly sensitive data (such as internal secrets, PII beyond what your UI requires, or credentials) inside the user profile returned from your backend. Design the \`/me\` endpoint to return only what the client genuinely needs.
+
+## Zero Client Auth Flicker
+
+Because the server plugin runs before SSR rendering begins, Vue components and \`useFetch()\` calls within SSR have immediate access to the correct \`auth.user\` and \`auth.isAuthenticated\` values. The hydrated payload means the browser initializes with the same state synchronously — no loading spinner or unauthenticated flash on page load.
+
 ## Accessing Sessions in Server Routes
 
 When building custom Nitro API routes (\`server/api/...\`), you can read the authenticated session directly from the H3 event context:
@@ -751,9 +843,10 @@ import { requireBearerAuthSession, callAuthApi } from '#imports'
 
 export default defineEventHandler(async (event) => {
   // 1. Ensures user is logged in, or throws 401 Unauthenticated
+  //    Reads from event.context.auth — no additional Redis round-trip
   const session = requireBearerAuthSession(event)
 
-  // 2. Call external API using the user's stored bearer token
+  // 2. Call external API using the user's server-held bearer token
   const projects = await callAuthApi('/v1/projects', {
     event,
     method: 'GET',
@@ -766,9 +859,13 @@ export default defineEventHandler(async (event) => {
 })
 \`\`\`
 
+\`requireBearerAuthSession(event)\` reads from \`event.context.auth\`, which is populated by the server middleware on every request. It does not make an additional Redis query.
+
+\`callAuthApi()\` automatically retrieves the bearer token from the Redis session and injects it as an \`Authorization: Bearer\` header on the outgoing request to your backend. The token is never passed to or through the browser.
+
 ## Server-Side Route Middleware
 
-Because the session is hydrated before route middleware executes, unauthenticated requests to protected pages are redirected **immediately on the server with a 302 redirect**, preventing any protected HTML from being sent to the client.
+Because the session is hydrated before route middleware executes on SSR, unauthenticated requests to protected pages are redirected on the server before any protected HTML is rendered. On client-side navigation, the same middleware logic runs in the browser using the already-hydrated auth state.
     `
   },
 
@@ -782,8 +879,10 @@ Because the session is hydrated before route middleware executes, unauthenticate
       { id: 'threat-model', title: 'Threat Model & Philosophy', level: 2 },
       { id: 'tokens-stay-server', title: 'Why Tokens Stay on the Server', level: 2 },
       { id: 'http-only-cookies', title: 'HTTP-Only Cookies: Strengths & Limits', level: 2 },
+      { id: 'ssr-payload-security', title: 'SSR Payload Security', level: 2 },
       { id: 'csrf-defense', title: 'CSRF Defense with nuxt-csurf', level: 2 },
       { id: 'redis-hardening', title: 'Redis Security Hardening', level: 2 },
+      { id: 'backend-authorization', title: 'Backend Authorization Boundary', level: 2 },
       { id: 'production-checklist', title: 'Production Deployment Checklist', level: 2 },
     ],
     content: `
@@ -793,7 +892,7 @@ Because the session is hydrated before route middleware executes, unauthenticate
 
 \`nuxt-bearer-auth\` was designed to eliminate the most common vulnerability pattern in modern Vue/Nuxt SPAs: **storing sensitive API bearer tokens in \`localStorage\` or client-accessible JavaScript memory**.
 
-We do not claim this package makes an application "100% unhackable". Security requires defense-in-depth across the entire stack.
+We do not claim this package makes an application "100% unhackable". Security requires defense-in-depth across the entire stack. The guarantees described here are precise — read them carefully.
 
 ## Why Tokens Stay on the Server
 
@@ -804,23 +903,36 @@ When a bearer token is stored in the browser:
 
 When using \`nuxt-bearer-auth\`:
 - The browser only possesses a random UUID session cookie flagged as **\`HttpOnly\`**, **\`Secure\`**, and **\`SameSite=Lax\`**.
-- JavaScript running in the browser (even malicious XSS payloads) **cannot read the cookie value**.
-- Even if an attacker induces a malicious request, they cannot extract the underlying API bearer token.
+- Browser JavaScript — including malicious XSS payloads — **cannot read the session cookie value** via \`document.cookie\`.
+- Even if an attacker induces a malicious request, they cannot extract the underlying API bearer token from the browser.
+
+The precise guarantee is: **the bearer token itself is not exposed to browser JavaScript**. This is different from claiming XSS has no impact at all — a successful XSS attack can still make authenticated requests on behalf of the user while the browser session is active.
 
 ## HTTP-Only Cookies: Strengths & Limits
 
-| Threat | Protected by HTTP-only Cookie? | Explanation |
+| Threat | Protected? | Explanation |
 | :--- | :---: | :--- |
-| **Token Exfiltration via XSS** | **YES** | \`document.cookie\` cannot access HTTP-only cookies; token stays in Redis. |
-| **Local Device Token Theft** | **YES** | No plaintext bearer tokens written to browser storage. |
-| **Cross-Site Request Forgery (CSRF)** | **REQUIRES CSRF LAYER** | Cookies are sent automatically with requests; mitigated by \`nuxt-csurf\`. |
-| **Direct XSS Execution** | **PARTIAL** | Attacker can make requests on user's behalf while page is open, but cannot steal the token itself. |
+| **Token exfiltration via XSS** | **YES** | \`document.cookie\` cannot read HttpOnly cookies; the bearer token stays in Redis and is never sent to the browser. |
+| **Local device token theft** | **YES** | No plaintext bearer tokens are written to \`localStorage\`, \`sessionStorage\`, or any browser-accessible storage. |
+| **Cross-Site Request Forgery (CSRF)** | **REQUIRES CSRF LAYER** | Cookies are sent automatically with same-site requests; mitigated by \`nuxt-csurf\`. |
+| **Authenticated XSS requests** | **PARTIAL** | An attacker with XSS can make authenticated HTTP requests using the browser's session, but cannot read or exfiltrate the bearer token itself. |
+
+## SSR Payload Security
+
+During SSR, the server plugin writes the user's profile and authentication status to the Nuxt hydration payload (\`nuxtApp.payload.bearerAuth\`). This payload is embedded in the initial HTML and is visible in the browser's page source.
+
+**What is included in the payload**: the user profile object (\`session.profile\`) and authentication status string.
+
+**What is never included**: the bearer token, refresh token, session metadata (IP address, user agent, expiry timestamps).
+
+Because the user profile is client-visible, you should design your backend's \`/me\` endpoint to return only the data your UI genuinely needs. Avoid including internal secrets, raw credentials, or excessive PII in the profile object.
 
 ## CSRF Defense with nuxt-csurf
 
-Because browser cookies are automatically attached by the browser on cross-origin requests, \`nuxt-bearer-auth\` integrates with \`nuxt-csurf\` by default:
+Because browser cookies are automatically attached on cross-origin requests, \`nuxt-bearer-auth\` integrates with \`nuxt-csurf\` by default:
 - On mutating requests (\`POST\`, \`PUT\`, \`PATCH\`, \`DELETE\`), a cryptographic CSRF token is verified via the \`x-csrf-token\` header.
-- The composable's internal fetcher automatically includes the active CSRF token.
+- The composable's internal fetcher automatically includes the active CSRF token on all requests.
+- Pre-authentication endpoints (login, register, etc.) have CSRF enforcement disabled — these routes have no session to protect.
 
 \`\`\`typescript
 bearerAuth: {
@@ -834,11 +946,29 @@ bearerAuth: {
 
 ## Redis Security Hardening
 
-Because Redis holds the mapping of session IDs to bearer tokens:
-1. **Network Isolation**: Never expose your Redis port (\`6379\`) to the public internet. Keep it inside your private VPC / overlay network.
-2. **TLS in Transit**: Use \`rediss://\` in staging and production to encrypt all traffic between Nuxt and Redis.
-3. **Strong Authentication**: Require a high-entropy password or ACL credentials.
-4. **Key Expiration**: All sessions automatically expire via Redis TTL (\`maxAge\`).
+Redis holds live session data including bearer tokens and user profiles. It must be treated as sensitive infrastructure.
+
+1. **Network isolation**: Never expose Redis port \`6379\` to the public internet. Keep Redis inside your private VPC or overlay network. The Nuxt server should be the only host that can reach Redis.
+2. **TLS in transit**: Use \`rediss://\` (Redis over TLS) in staging and production to encrypt all traffic between Nuxt and Redis.
+3. **Strong authentication**: Require a high-entropy password or ACL credentials on your Redis instance.
+4. **Automatic key expiration**: All session keys carry a Redis TTL (\`maxAge\` seconds). Sessions expire automatically without manual cleanup.
+5. **Credential storage**: Store \`REDIS_URL\` (including any password) only in server-side environment variables — never commit credentials to source control.
+
+> **Current encryption posture**: Session data is stored as JSON in Redis without application-level encryption. The \`sessionSecret\` configuration field is reserved for a future signing or encryption mechanism but is not used in the current release. Transport-level TLS via \`rediss://\` is the recommended approach for protecting data in transit between Nuxt and Redis.
+
+## Backend Authorization Boundary
+
+\`nuxt-bearer-auth\` protects your Nuxt application routes and keeps bearer tokens off the browser. It does **not** automatically secure your external backend API endpoints.
+
+This distinction matters:
+
+- A protected Nuxt page means: unauthenticated users are redirected before they can see your UI.
+- A protected Nuxt server route (using \`requireBearerAuthSession\`) means: the Nuxt server verified the request has a valid session before processing it.
+- Neither of these prevents a valid bearer token from being used directly against your backend API outside of Nuxt.
+
+**Your backend API remains the authoritative security boundary for its own resources.** Backend endpoints should enforce their own authentication and authorization — verifying the bearer token, checking scopes or roles, and rejecting unauthorized requests regardless of where the request originates.
+
+\`nuxt-bearer-auth\` is a frontend session management layer. It works alongside backend authorization, not as a replacement for it.
 
 ## Production Deployment Checklist
 
@@ -847,16 +977,19 @@ Before launching your application to production:
 - [ ] **Enforce HTTPS**: Cookies must have the \`Secure\` attribute enabled (automatic when \`NODE_ENV=production\`).
 - [ ] **Set SameSite Attribute**: Use \`sameSite: 'lax'\` (or \`'strict'\` for high-security applications).
 - [ ] **Configure Redis TLS**: Ensure \`REDIS_URL\` uses \`rediss://\` on cloud providers.
-- [ ] **Set Strong API_BASE_URL**: Point to your secure API gateway.
+- [ ] **Isolate Redis**: Redis should not be publicly accessible — restrict access to your Nuxt server only.
+- [ ] **Require Redis authentication**: Set a strong password or ACL rules on your Redis instance.
+- [ ] **Set Strong API_BASE_URL**: Point to your secure, authenticated API gateway.
 - [ ] **Enable Backend Rate Limiting**: Protect your backend \`/auth/login\` and \`/auth/refresh\` routes from brute-force attacks.
-- [ ] **Set Short Backend Token Lifetimes**: Configure your API (e.g. Laravel Sanctum or JWT) with short access token lifetimes (e.g. 15-60 minutes) combined with silent refresh.
+- [ ] **Set Short Backend Token Lifetimes**: Configure your API (e.g. Laravel Sanctum or JWT) with short access token lifetimes (e.g. 15–60 minutes) combined with silent refresh.
+- [ ] **Review SSR payload content**: Ensure your backend \`/me\` endpoint returns only the profile data your UI needs — the profile object is included in the SSR hydration payload visible to the browser.
     `
   },
 
   'api': {
     slug: 'api',
     title: 'API & Composable Reference',
-    description: 'Complete reference for useBearerAuth composable, types, server handlers, and server utilities.',
+    description: 'Complete reference for useBearerAuth composable, types, server handlers, server utilities, and public type exports.',
     category: 'Reference & Recipes',
     order: 7,
     sections: [
@@ -866,6 +999,8 @@ Before launching your application to production:
       { id: 'server-api-routes', title: 'Built-in Server API Routes', level: 2 },
       { id: 'server-utilities', title: 'Server Utilities', level: 2 },
       { id: 'typescript-types', title: 'TypeScript Types', level: 2 },
+      { id: 'public-type-exports', title: 'Public Type Exports', level: 2 },
+      { id: 'testing', title: 'Testing Foundation', level: 2 },
     ],
     content: `
 ## useBearerAuth() / useAuth()
@@ -886,7 +1021,7 @@ const auth = useBearerAuth<CustomUser>()
 | \`error\` | \`Ref<string \| null>\` | Last authentication error message string. |
 | \`loading\` | \`ComputedRef<boolean>\` | Convenience computed shorthand for \`status.value === 'loading'\`. |
 | \`isAuthenticated\` | \`ComputedRef<boolean>\` | Convenience computed shorthand for \`status.value === 'authenticated'\`. |
-| \`serverReady\` | \`ComputedRef<Promise<void>>\` | Resolves when server-side auth hydration completes. |
+| \`serverReady\` | \`ComputedRef<Promise<void>>\` | Resolves when server-side auth hydration completes. Used internally by the global middleware. |
 
 ### Composable Methods
 
@@ -904,7 +1039,7 @@ register(payload: Record<string, unknown>, redirectPath?: string | null): Promis
 verifyOtp(payload: Record<string, unknown>, redirectPath?: string | null): Promise<AuthApiResponse<User>>
 
 // 5. Fetch current user from /api/auth/me
-fetchUser(options?: { refresh?: boolean }): Promise<{ data: User | null; error: string | null }>
+fetchUser(options?: FetchUserOptions): Promise<{ data: User | null; error: string | null }>
 
 // 6. Silent token refresh
 refresh(): Promise<AuthApiResponse<User>>
@@ -933,54 +1068,76 @@ The module mounts these Nitro handlers under \`routes.localApiPrefix\` (default:
 | :--- | :--- | :--- |
 | \`POST /api/auth/login\` | \`endpoints.login\` | Authenticates user, creates Redis session, sets cookie. |
 | \`POST /api/auth/social-login\` | \`endpoints.socialLogin\` | Passes OAuth token to backend, creates Redis session. |
-| \`POST /api/auth/logout\` | \`endpoints.logout\` | Destroys Redis session, deletes cookie, calls backend logout. |
-| \`GET /api/auth/me\` | \`endpoints.me\` | Returns current user from Redis or refreshes from backend. |
-| \`POST /api/auth/refresh\` | \`endpoints.refresh\` | Calls backend refresh using Redis refresh token, updates session. |
-| \`POST /api/auth/register\` | \`endpoints.register\` | Forwards registration payload. |
-| \`POST /api/auth/otp-verification\`| \`endpoints.verifyOtp\` | Forwards OTP verification payload. |
+| \`POST /api/auth/logout\` | \`endpoints.logout\` | Destroys Redis session and cookie; calls backend logout (continues even if backend is unreachable). |
+| \`GET /api/auth/me\` | \`endpoints.me\` | Returns current user from Redis session cache or refreshes from backend if \`?refresh=true\`. |
+| \`POST /api/auth/refresh\` | \`endpoints.refresh\` | Calls backend refresh using Redis-held refresh token, updates session. New token is not returned to browser. |
+| \`POST /api/auth/register\` | \`endpoints.register\` | Forwards registration payload. Creates session if backend returns a token. |
+| \`POST /api/auth/otp-verification\`| \`endpoints.verifyOtp\` | Forwards OTP verification payload. Creates session if backend returns a token. |
 | \`POST /api/auth/resend-otp/:id\` | \`endpoints.resendOtp\` | Triggers OTP resend for given user identifier. |
 | \`POST /api/auth/forgot-password\` | \`endpoints.forgotPassword\`| Forwards forgot-password email/payload. |
 | \`POST /api/auth/reset-password\` | \`endpoints.resetPassword\` | Forwards password reset payload with token. |
-| \`GET /api/auth/sessions\` | Local Redis | Lists active sessions for current user. |
-| \`DELETE /api/auth/sessions/:id\` | Local Redis | Revokes specific session ID. |
+| \`GET /api/auth/sessions\` | Local Redis | Lists active sessions for current user as \`{ sessions: PublicSession[] }\`. |
+| \`DELETE /api/auth/sessions/:id\` | Local Redis | Revokes specific session ID after verifying ownership. |
 
 ## Server Utilities
 
-When writing custom Nitro endpoints in your application, you can import these utilities:
+When writing custom Nitro endpoints in your application, import these utilities from \`#imports\`:
 
 \`\`\`typescript
 import {
-  getBearerAuthSession,
-  createBearerAuthSession,
-  updateBearerAuthSession,
-  destroyBearerAuthSession,
-  destroyAllBearerAuthSessions,
-  getUserBearerAuthSessions,
-  deleteUserBearerAuthSession,
-  requireBearerAuthSession,
-  callAuthApi,
+  // Session read/write
+  getBearerAuthSession,       // Read session from Redis by cookie
+  createBearerAuthSession,    // Create new session after authentication
+  updateBearerAuthSession,    // Update token, refreshToken, or profile in session
+  destroyBearerAuthSession,   // Delete session from Redis and clear cookie
+  destroyAllBearerAuthSessions, // Delete all sessions for a user ID
+  getUserBearerAuthSessions,  // List PublicSession[] for a user (no tokens)
+  deleteUserBearerAuthSession, // Delete a specific session with ownership check
+
+  // Guard utility
+  requireBearerAuthSession,   // Read event.context.auth or throw 401
+
+  // External API proxy
+  callAuthApi,                // Make authenticated request to backend using session token
+
+  // Redis client (advanced use)
   getBearerAuthRedisClient,
 } from '#imports'
 \`\`\`
 
+**\`requireBearerAuthSession(event)\`** reads from \`event.context.auth\` (populated by the server middleware) and throws a \`401 Unauthenticated\` error if no valid session is present. It does not make an additional Redis query — the session is already attached to the event context by the time your handler runs.
+
+**\`callAuthApi(endpoint, options)\`** constructs an HTTP request to your backend using \`apiBaseUrl + endpoint\`. When an \`event\` is provided, it automatically retrieves the bearer token from the Redis session and injects it as an \`Authorization: Bearer\` header. The token is never passed through the browser.
+
 ## TypeScript Types
 
 \`\`\`typescript
+export type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'unauthenticated'
+
 export interface BearerAuthUser {
   id?: string | number
   uuid?: string
   email?: string
   name?: string
-  [key: string]: unknown
+  [key: string]: unknown  // Open-ended — your backend user shape
 }
 
 export interface BearerAuthSession<User extends BearerAuthUser = BearerAuthUser> {
   userId: string
-  token: string
+  token: string           // Bearer token — server-side only
   refreshToken?: string | null
   profile: User | null
+  createdAt: string       // ISO timestamp
+  expiresAt: number       // Epoch milliseconds (application-level expiry guard)
+  lastActivity: string    // ISO timestamp — updated on each authenticated request
+  userAgent?: string
+  ipAddress?: string
+}
+
+// Safe public shape — omits token, refreshToken, userId, expiresAt
+export interface PublicSession {
+  id: string
   createdAt: string
-  expiresAt: number
   lastActivity: string
   userAgent?: string
   ipAddress?: string
@@ -994,6 +1151,104 @@ export interface AuthApiResponse<T = unknown> {
   code?: string | number
   nextAction?: string
 }
+
+export interface LoginCredentials {
+  identifier?: string
+  email?: string
+  username?: string
+  phone?: string
+  mobile?: string
+  password?: string
+  [key: string]: unknown
+}
+
+export interface SocialLoginCredentials {
+  jwt?: string
+  token?: string
+  provider?: string
+  [key: string]: unknown
+}
+
+export interface FetchUserOptions {
+  refresh?: boolean
+}
+\`\`\`
+
+## Public Type Exports
+
+All core authentication types are exported from the package root and can be imported directly in your application:
+
+\`\`\`typescript
+import type {
+  // Auth state and response types
+  AuthStatus,
+  AuthApiResponse,
+  BearerAuthUser,
+  BearerAuthSession,
+  PublicSession,
+
+  // Credential types
+  LoginCredentials,
+  SocialLoginCredentials,
+  FetchUserOptions,
+
+  // Module configuration types
+  BearerAuthModuleOptions,
+  BearerAuthEndpointOptions,
+  BearerAuthResponsePaths,
+  BearerAuthRedirectOptions,
+  BearerAuthRouteOptions,
+  BearerAuthCookieOptions,
+  BearerAuthCsrfOptions,
+} from 'nuxt-bearer-auth'
+\`\`\`
+
+These types are useful when extending the module, writing typed custom middleware, building strongly-typed composables around \`useBearerAuth\`, or constructing typed server API handlers.
+
+\`\`\`typescript
+// Example: extending BearerAuthUser with your own fields
+import type { BearerAuthUser } from 'nuxt-bearer-auth'
+
+interface AppUser extends BearerAuthUser {
+  role: 'admin' | 'editor' | 'viewer'
+  organizationId: string
+  avatarUrl?: string
+}
+
+// Pass your type to the composable for full type inference
+const auth = useBearerAuth<AppUser>()
+
+// auth.user.value is now typed as AppUser | null
+console.log(auth.user.value?.role)
+\`\`\`
+
+## Testing Foundation
+
+\`nuxt-bearer-auth\` ships with a comprehensive automated test suite to give you confidence in the authentication foundation you are building on.
+
+**Test runner**: Vitest
+**Test results**: 10 test suites · 66 tests · 66 passing
+
+The suite covers:
+
+| Suite | What it tests |
+| :--- | :--- |
+| \`sessions.test.ts\` | Session creation, retrieval, update, sliding TTL, destroy, destroy-all, multi-device listing, per-user revocation, \`requireBearerAuthSession\` |
+| \`auth-handlers.test.ts\` | Login, social login, logout resilience, token refresh, \`/me\` cached vs. forced refresh |
+| \`otp-register.test.ts\` | OTP verification flow, registration with and without auto-login |
+| \`server-middleware.test.ts\` | Public route bypass, safe method bypass, authenticated context attachment, 401 on protected routes |
+| \`route-middleware.test.ts\` | Client route guard — public access, protected redirect, auth-page redirect for authenticated users |
+| \`ssr-plugin.test.ts\` | SSR hydration with valid session, unauthenticated SSR, Redis error resilience |
+| \`normalize.test.ts\` | Response path normalization for multiple backend response shapes |
+| \`paths.test.ts\` | JSON path traversal, \`$\` root selector, dot notation, null safety, URL interpolation |
+| \`errors.test.ts\` | \`FetchError\` normalization, H3 error passthrough, generic error → 500 |
+| \`redis-reliability.test.ts\` | Edge cases: missing cookie, missing session key, partial context |
+
+Run the tests yourself:
+
+\`\`\`bash
+# In the nuxt-bearer-auth package directory
+npm test
 \`\`\`
     `
   },
@@ -1087,19 +1342,21 @@ bearerAuth: {
 }
 \`\`\`
 
+> **Note**: The \`HttpOnly\` flag is always \`true\` on the session cookie and is not configurable. The \`Secure\` flag defaults to \`true\` in production and can be overridden via \`sessionCookie.secure\`.
+
 ## Custom Route Middleware
 
-If you want to handle route authorization entirely in your own custom middleware (for role-based access control, tenant permissions, etc.), you can disable the built-in global middleware:
+If you want to handle route protection entirely in your own middleware (for example to check user roles from \`auth.user.value\`), you can disable the built-in global middleware:
 
 \`\`\`typescript
 bearerAuth: {
   routes: {
-    middleware: false, // Disables built-in global route middleware
+    middleware: false, // Disables the built-in global route middleware
   },
 }
 \`\`\`
 
-Then create your own \`middleware/auth.global.ts\`:
+Then create your own \`middleware/auth.global.ts\`. The example below shows a user-implemented pattern that checks a \`role\` property on the user object — this logic is entirely in your application code, not provided by \`nuxt-bearer-auth\`:
 
 \`\`\`typescript
 // middleware/auth.global.ts
@@ -1110,6 +1367,8 @@ export default defineNuxtRouteMiddleware((to) => {
     return navigateTo('/login')
   }
 
+  // Role checking is application logic — implement it here based on
+  // whatever your auth.user.value shape looks like
   if (to.meta.role && auth.user.value?.role !== to.meta.role) {
     return navigateTo('/forbidden')
   }
@@ -1263,15 +1522,10 @@ Allow your users to view all currently active browser sessions and remotely revo
 
 \`\`\`vue
 <script setup lang="ts">
-interface SessionItem {
-  id: string
-  createdAt: string
-  lastActivity: string
-  userAgent?: string
-  ipAddress?: string
-}
+import type { PublicSession } from 'nuxt-bearer-auth'
 
-const { data: sessions, refresh, pending } = await useFetch<SessionItem[]>('/api/auth/sessions')
+// GET /api/auth/sessions returns { sessions: PublicSession[] }
+const { data, refresh, pending } = await useFetch<{ sessions: PublicSession[] }>('/api/auth/sessions')
 const revokingId = ref<string | null>(null)
 
 async function revoke(id: string) {
@@ -1294,7 +1548,7 @@ async function revoke(id: string) {
 
     <div v-else class="space-y-4">
       <div
-        v-for="s in sessions"
+        v-for="s in data?.sessions"
         :key="s.id"
         class="p-4 rounded-xl border border-gray-800 bg-gray-900/60 flex items-center justify-between"
       >
@@ -1306,7 +1560,7 @@ async function revoke(id: string) {
             </span>
           </div>
           <p class="text-xs text-gray-400">
-            IP: {{ s.ipAddress || 'Unknown' }} • Last active: {{ new Date(s.lastActivity).toLocaleString() }}
+            IP: {{ s.ipAddress || 'Unknown' }} · Last active: {{ new Date(s.lastActivity).toLocaleString() }}
           </p>
         </div>
 

@@ -30,7 +30,7 @@ const layers = [
   {
     num: '3',
     name: 'Session Manager Layer',
-    desc: 'Generates secure UUID session IDs, encrypts cookies, updates last-activity timestamps, manages session TTLs, and indexes multi-device logins under user_sessions:userId sets.',
+    desc: 'Generates cryptographically random UUID session IDs, issues secure HTTP-only cookies, updates last-activity timestamps, manages sliding session TTLs, and indexes multi-device logins under user_sessions:userId sets.',
     tech: 'Node Crypto / H3 Cookie Utilities',
   },
   {

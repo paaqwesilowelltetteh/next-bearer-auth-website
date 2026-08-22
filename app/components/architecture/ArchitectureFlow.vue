@@ -193,7 +193,7 @@ const currentStep = computed<FlowStep>(() => (steps[activeStep.value] || steps[0
 
             <div>
               <h4 class="text-sm font-bold text-white">Redis Cache</h4>
-              <p class="text-xs text-gray-400 mt-0.5">Encrypted Store (TTL)</p>
+              <p class="text-xs text-gray-400 mt-0.5">Session Store (TTL)</p>
             </div>
 
             <div class="p-2.5 rounded-lg bg-gray-950/80 border border-gray-800/80 text-[11px] font-mono space-y-1">
