@@ -38,6 +38,7 @@ export const docCategories: DocCategory[] = [
       { slug: 'sessions', title: 'Session Management', description: 'Redis session storage, sliding TTL expiration, active devices, and remote revocation.' },
       { slug: 'ssr', title: 'SSR & Hydration', description: 'Server-side rendering auth state, payload hydration, and route guards.' },
       { slug: 'security', title: 'Security Architecture', description: 'HTTP-only cookies, token isolation, CSRF protection, and production checklist.' },
+      { slug: 'authorization', title: 'Authorization', description: 'Abilities, route authorization metadata, server-side requireAbility(), and why your backend remains authoritative.' },
     ]
   },
   {
@@ -801,6 +802,7 @@ export default defineNuxtPlugin(async (nuxtApp) => {
     nuxtApp.payload.bearerAuth = {
       user: session?.profile || null,
       status: session?.profile ? 'authenticated' : 'unauthenticated',
+      abilities: session?.abilities || null,
     }
   } catch (error) {
     auth.clearAuthState()
@@ -818,6 +820,7 @@ Understanding what is and is not included in the SSR payload is important for se
 **Included in \`nuxtApp.payload.bearerAuth\` (sent to browser):**
 - \`user\` — the user profile object returned by your backend (e.g. \`{ id, name, email, role, ... }\`)
 - \`status\` — the authentication status string (\`"authenticated"\` or \`"unauthenticated"\`)
+- \`abilities\` — the normalized ability strings from the Redis session (\`string[] | null\`); powers advisory client checks such as \`auth.can()\`
 
 **Stays server-side only (never sent to browser):**
 - \`token\` — the bearer token
@@ -921,7 +924,7 @@ The precise guarantee is: **the bearer token itself is not exposed to browser Ja
 
 During SSR, the server plugin writes the user's profile and authentication status to the Nuxt hydration payload (\`nuxtApp.payload.bearerAuth\`). This payload is embedded in the initial HTML and is visible in the browser's page source.
 
-**What is included in the payload**: the user profile object (\`session.profile\`) and authentication status string.
+**What is included in the payload**: the user profile object (\`session.profile\`), the authentication status string, and the normalized session abilities array (\`string[] | null\`) that powers advisory client checks.
 
 **What is never included**: the bearer token, refresh token, session metadata (IP address, user agent, expiry timestamps).
 
@@ -986,12 +989,191 @@ Before launching your application to production:
     `
   },
 
+  'authorization': {
+    slug: 'authorization',
+    title: 'Authorization',
+    description: 'Abilities, client-side checks, route authorization metadata, server-side requireAbility(), and the three-layer security model.',
+    category: 'Core Guides',
+    order: 7,
+    sections: [
+      { id: 'three-layer-model', title: 'The Three-Layer Authorization Model', level: 2 },
+      { id: 'enabling-authorization', title: 'Enabling Authorization', level: 2 },
+      { id: 'abilities', title: 'Abilities, Roles & Permissions', level: 2 },
+      { id: 'client-checks', title: 'Client Checks: can() and cannot()', level: 2 },
+      { id: 'route-authorization', title: 'Route Authorization Metadata', level: 2 },
+      { id: 'matching-semantics', title: 'Matching Semantics: all / any / exact', level: 2 },
+      { id: 'server-authorization', title: 'Server Authorization with requireAbility()', level: 2 },
+      { id: 'http-semantics', title: '401 vs 403', level: 2 },
+      { id: 'trust-boundary', title: 'Trust Boundary & Security Rules', level: 2 },
+    ],
+    content: `
+## The Three-Layer Authorization Model
+
+Authorization in this stack has three layers, and each layer stays responsible for its own decisions:
+
+\`\`\`
+1. UI authorization          auth.can("users.delete")        → hides buttons, disables links
+        ↓
+2. Nuxt app/server layer     route metadata + requireAbility → stops page visits and Nuxt routes
+        ↓
+3. Backend API (Laravel)     policies / gates / middleware   → authoritative enforcement
+\`\`\`
+
+**The lower layer is always authoritative.** \`auth.can()\` never secures an API endpoint. Route metadata never authorizes an external API call. \`requireAbility()\` never replaces a Laravel policy. Even when every Nuxt check passes, your backend must still authorize every request it receives using the bearer token.
+
+## Enabling Authorization
+
+Authorization is optional and disabled by default. Enable it in \`nuxt.config.ts\`:
+
+\`\`\`typescript
+export default defineNuxtConfig({
+  modules: ['nuxt-bearer-auth'],
+
+  bearerAuth: {
+    authorization: {
+      enabled: true,
+      source: 'session',
+      responsePaths: {
+        abilities: ['abilities', 'data.abilities'],
+        roles: ['roles', 'data.roles'],
+        permissions: ['permissions', 'data.permissions'],
+      },
+      rolePrefix: 'role:',
+    },
+
+    redirects: {
+      unauthorized: '/not-allowed', // where unauthorized users are sent
+    },
+  },
+})
+\`\`\`
+
+Abilities are read from session-establishing responses (login, social login, register, OTP verification) and from refresh/\`me\` responses, normalized into a sorted \`string[]\`, and persisted on the Redis session. An omitted field preserves existing abilities; logout and failed authentication clear them.
+
+## Abilities, Roles & Permissions
+
+The canonical representation of authorization state is a flat array of ability strings:
+
+- Direct abilities pass through as-is: \`"campaign.create"\`
+- Roles are prefixed to avoid collisions: role \`admin\` becomes \`"role:admin"\`
+- Permissions are treated as abilities: \`"users.delete"\`
+
+Roles and permissions are input formats; abilities are what the package stores, exposes, and matches. Matching is **exact string equality only** — there are no wildcards (\`users.*\`), no prefix inheritance (\`users\` granting \`users.view\`), and no hierarchical permissions.
+
+## Client Checks: can() and cannot()
+
+\`\`\`vue
+<script setup lang="ts">
+const auth = useBearerAuth()
+</script>
+
+<template>
+  <button v-if="auth.can('users.delete')" @click="destroy">Delete</button>
+  <p v-if="auth.cannot('campaign.create')">You cannot create campaigns.</p>
+</template>
+\`\`\`
+
+These checks are **advisory UI logic only**. They decide whether to render a control — they do not protect the API call behind it. A user can always craft a request directly against your backend, which is why Laravel must re-check \`users.delete\` on \`DELETE /api/users/123\` regardless of what the UI rendered.
+
+## Route Authorization Metadata
+
+Any page can declare the abilities it requires via \`definePageMeta\`. The global \`bearer-auth\` route middleware enforces them:
+
+\`\`\`vue
+<script setup lang="ts">
+definePageMeta({
+  authorization: {
+    abilities: ['users.view'],
+    mode: 'all', // optional — 'all' is the default
+  },
+})
+</script>
+\`\`\`
+
+Runtime behavior:
+
+1. **No metadata on the route** → navigation proceeds exactly as before.
+2. **Authorization disabled** (\`authorization.enabled: false\`) → metadata is ignored.
+3. **Unauthenticated visitor** → normal login redirect with \`?redirect=\` preserved. Authentication failure and authorization failure stay separate.
+4. **Authenticated but lacking abilities** → redirected to \`redirects.unauthorized\` (default \`/auth/not-allowed\`). The user is *not* sent to login — they are logged in, just not allowed.
+5. **Authorized** → navigation continues.
+
+Route authorization protects page navigation inside your Nuxt app. It does not authorize requests that bypass routing (direct API calls), and it does not secure external APIs.
+
+## Matching Semantics: all / any / exact
+
+| Metadata | Session abilities | Result |
+| --- | --- | --- |
+| \`abilities: ['users.view']\` | \`['users.view']\` | allowed |
+| \`abilities: ['users.view']\` | \`['users.edit']\` | unauthorized |
+| \`['a', 'b']\` (default \`all\`) | has both | allowed |
+| \`['a', 'b']\` (default \`all\`) | has only one | unauthorized |
+| \`['a', 'b'], mode: 'any'\` | has at least one | allowed |
+| \`['a', 'b'], mode: 'any'\` | has neither | unauthorized |
+
+Rules:
+
+- \`mode\` defaults to \`'all'\`: every listed ability must exist.
+- \`mode: 'any'\`: at least one listed ability must exist.
+- Matching is exact. Holding \`users.*\` does **not** satisfy \`users.view\`; holding \`users.view.edit\` does **not** satisfy \`users.view\`.
+
+## Server Authorization with requireAbility()
+
+For Nitro server routes, import \`requireAbility\` from the dedicated server-only subpath:
+
+\`\`\`typescript
+// server/api/admin/users.get.ts
+import { requireAbility } from 'nuxt-bearer-auth/server'
+
+export default defineEventHandler((event) => {
+  // Throws 401 if unauthenticated, 403 if the ability is missing.
+  const session = requireAbility(event, 'users.view')
+
+  // Multiple abilities - every one required by default:
+  requireAbility(event, ['users.view', 'users.export'])
+  // At least one required:
+  requireAbility(event, ['reports.view', 'reports.export'], 'any')
+
+  return { users: [] }
+})
+\`\`\`
+
+Key facts:
+
+- **Server-only export.** \`nuxt-bearer-auth/server\` keeps the helper out of browser bundles. Importing it from client code will break your build - that is intentional.
+- **Trusted source only.** It reads abilities exclusively from \`event.context.auth\`, the Redis-backed server session populated by the package server middleware. It never reads \`useState('bearer-auth-abilities')\`, request headers, query parameters, or request bodies. Client-supplied ability lists cannot grant access.
+- **Separate context.** On success it sets \`event.context.authorization = { abilities, source: 'session' }\` - normalized strings only, no tokens or session internals - and returns the authenticated session.
+- **Fail-safe.** If the session has no abilities (for example because authorization is disabled), every requirement fails closed with 403.
+- **Not backend enforcement.** Guarding a route with \`requireAbility(event, 'campaign.delete')\` stops your own route from running. If that route then calls \`DELETE https://api.example.com/campaigns/123\`, Laravel must still authorize \`campaign.delete\` itself.
+
+## 401 vs 403
+
+The package keeps authentication and authorization failures distinct:
+
+| Situation | Server response | Route behavior |
+| --- | --- | --- |
+| No valid session | \`401 Unauthenticated\` | Redirect to login with \`?redirect=\` |
+| Valid session, missing ability | \`403 Authorization required\` | Redirect to \`redirects.unauthorized\` |
+
+Error payloads contain only a status code and generic message - never tokens, session internals, or the user ability list.
+
+## Trust Boundary & Security Rules
+
+- Bearer and refresh tokens remain server-side in Redis at all times; authorization features never expose them.
+- Client authorization state (\`auth.abilities\`) is derived convenience data for UI rendering. It is never consulted by \`requireAbility()\`.
+- No request input (headers, query, body, cookies beyond the http-only session id) can grant abilities.
+- \`event.context.authorization\` contains only the normalized \`string[]\` of abilities and its source.
+- Disabling authorization makes route metadata inert and makes \`requireAbility()\` fail closed - it never silently grants access.
+- Your Laravel (or any) backend remains the authoritative security boundary for its own endpoints.
+    `
+  },
+
   'api': {
     slug: 'api',
     title: 'API & Composable Reference',
     description: 'Complete reference for useBearerAuth composable, types, server handlers, server utilities, and public type exports.',
     category: 'Reference & Recipes',
-    order: 7,
+    order: 8,
     sections: [
       { id: 'use-bearer-auth', title: 'useBearerAuth() / useAuth()', level: 2 },
       { id: 'reactive-state', title: 'Reactive State Properties', level: 2 },
@@ -1019,6 +1201,7 @@ const auth = useBearerAuth<CustomUser>()
 | \`status\` | \`Ref<AuthStatus>\` | \`'idle' \| 'loading' \| 'authenticated' \| 'unauthenticated'\`. |
 | \`ready\` | \`Ref<boolean>\` | \`true\` once initial auth check (SSR or client) has resolved. |
 | \`error\` | \`Ref<string \| null>\` | Last authentication error message string. |
+| \`abilities\` | \`Ref<string[] \| null>\` | Normalized ability strings hydrated from the server session; powers the advisory \`can()\` / \`cannot()\` checks. |
 | \`loading\` | \`ComputedRef<boolean>\` | Convenience computed shorthand for \`status.value === 'loading'\`. |
 | \`isAuthenticated\` | \`ComputedRef<boolean>\` | Convenience computed shorthand for \`status.value === 'authenticated'\`. |
 | \`serverReady\` | \`ComputedRef<Promise<void>>\` | Resolves when server-side auth hydration completes. Used internally by the global middleware. |
@@ -1058,6 +1241,12 @@ resendOtp(identifier: string, payload?: Record<string, unknown>): Promise<any>
 
 // 11. Clear client auth state manually
 clearAuthState(): void
+
+// 12. Advisory ability check — exact string match against auth.abilities
+can(ability: string): boolean
+
+// 13. Inverse of can()
+cannot(ability: string): boolean
 \`\`\`
 
 ## Built-in Server API Routes
@@ -1107,6 +1296,8 @@ import {
 
 **\`requireBearerAuthSession(event)\`** reads from \`event.context.auth\` (populated by the server middleware) and throws a \`401 Unauthenticated\` error if no valid session is present. It does not make an additional Redis query — the session is already attached to the event context by the time your handler runs.
 
+**\`requireAbility(event, abilities, mode?)\`** enforces authorization on top of authentication: it throws \`401 Unauthenticated\` when no session exists and \`403 Authorization required\` when the session lacks the required ability. It is imported from the server-only subpath \`nuxt-bearer-auth/server\` rather than \`#imports\` so it never reaches client bundles. See the [Authorization](/docs/authorization) guide.
+
 **\`callAuthApi(endpoint, options)\`** constructs an HTTP request to your backend using \`apiBaseUrl + endpoint\`. When an \`event\` is provided, it automatically retrieves the bearer token from the Redis session and injects it as an \`Authorization: Bearer\` header. The token is never passed through the browser.
 
 ## TypeScript Types
@@ -1132,6 +1323,7 @@ export interface BearerAuthSession<User extends BearerAuthUser = BearerAuthUser>
   lastActivity: string    // ISO timestamp — updated on each authenticated request
   userAgent?: string
   ipAddress?: string
+  abilities?: string[] | null  // Normalized ability strings — server-derived
 }
 
 // Safe public shape — omits token, refreshToken, userId, expiresAt
@@ -1200,6 +1392,15 @@ import type {
   BearerAuthRouteOptions,
   BearerAuthCookieOptions,
   BearerAuthCsrfOptions,
+
+  // Authorization types
+  Ability,
+  AuthorizationSource,
+  AuthorizationMatchMode,
+  AuthorizationRouteRequirement,
+  AuthorizationResponsePaths,
+  AuthorizationState,
+  BearerAuthAuthorizationConfig,
 } from 'nuxt-bearer-auth'
 \`\`\`
 
@@ -1227,7 +1428,7 @@ console.log(auth.user.value?.role)
 \`nuxt-bearer-auth\` ships with a comprehensive automated test suite to give you confidence in the authentication foundation you are building on.
 
 **Test runner**: Vitest
-**Test results**: 10 test suites · 66 tests · 66 passing
+**Test results**: 13 test files · 125 tests · 125 passing (verified during the Phase 3 release audit)
 
 The suite covers:
 
@@ -1237,7 +1438,10 @@ The suite covers:
 | \`auth-handlers.test.ts\` | Login, social login, logout resilience, token refresh, \`/me\` cached vs. forced refresh |
 | \`otp-register.test.ts\` | OTP verification flow, registration with and without auto-login |
 | \`server-middleware.test.ts\` | Public route bypass, safe method bypass, authenticated context attachment, 401 on protected routes |
-| \`route-middleware.test.ts\` | Client route guard — public access, protected redirect, auth-page redirect for authenticated users |
+| \`route-middleware.test.ts\` | Client route guard — public access, protected redirect, auth-page redirect for authenticated users, Phase 3 authorization metadata enforcement (disabled mode inert, all/any modes, exact matching, custom unauthorized route, fail-closed malformed client state) |
+| \`authorization-normalization.test.ts\` | Abilities/roles/permissions normalization into sorted unique strings, disabled/missing configuration safety |
+| \`authorization-client.test.ts\` | Client ability synchronization across login/refresh/me, omission preservation, logout clearing stale abilities |
+| \`authorization-enforcement.test.ts\` | Server \`requireAbility()\` — 401 vs 403, all/any semantics, exact matching, fail-closed malformed session data, rejection of client-supplied state/headers/query |
 | \`ssr-plugin.test.ts\` | SSR hydration with valid session, unauthenticated SSR, Redis error resilience |
 | \`normalize.test.ts\` | Response path normalization for multiple backend response shapes |
 | \`paths.test.ts\` | JSON path traversal, \`$\` root selector, dot notation, null safety, URL interpolation |
@@ -1258,7 +1462,7 @@ npm test
     title: 'Customization & Response Mapping',
     description: 'How to connect non-standard APIs, customize cookies, response paths, and custom middleware.',
     category: 'Reference & Recipes',
-    order: 8,
+    order: 9,
     sections: [
       { id: 'response-paths', title: 'Configuring Response Paths', level: 2 },
       { id: 'custom-endpoints', title: 'Custom Endpoint Mappings', level: 2 },
@@ -1382,7 +1586,7 @@ export default defineNuxtRouteMiddleware((to) => {
     title: 'Cookbook & Integration Examples',
     description: 'Realistic recipes for Laravel Sanctum, custom REST APIs, SSR Dashboards, and Session Managers.',
     category: 'Reference & Recipes',
-    order: 9,
+    order: 10,
     sections: [
       { id: 'laravel-sanctum', title: 'Laravel Sanctum / API Integration', level: 2 },
       { id: 'custom-rest-api', title: 'Generic Node/Go/Python Bearer API', level: 2 },
