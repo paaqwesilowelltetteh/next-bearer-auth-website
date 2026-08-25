@@ -38,7 +38,7 @@ export const docCategories: DocCategory[] = [
       { slug: 'sessions', title: 'Session Management', description: 'Redis session storage, sliding TTL expiration, active devices, and remote revocation.' },
       { slug: 'ssr', title: 'SSR & Hydration', description: 'Server-side rendering auth state, payload hydration, and route guards.' },
       { slug: 'security', title: 'Security Architecture', description: 'HTTP-only cookies, token isolation, CSRF protection, and production checklist.' },
-      { slug: 'authorization', title: 'Authorization', description: 'Abilities, route authorization metadata, server-side requireAbility(), and why your backend remains authoritative.' },
+      { slug: 'authorization', title: 'Authorization', description: 'Abilities, client checks, UI authorization components, route authorization metadata, server-side requireAbility(), and why your backend remains authoritative.' },
     ]
   },
   {
@@ -1000,6 +1000,7 @@ Before launching your application to production:
       { id: 'enabling-authorization', title: 'Enabling Authorization', level: 2 },
       { id: 'abilities', title: 'Abilities, Roles & Permissions', level: 2 },
       { id: 'client-checks', title: 'Client Checks: can() and cannot()', level: 2 },
+      { id: 'ui-components', title: 'UI Authorization: <Can> and <Cannot>', level: 2 },
       { id: 'route-authorization', title: 'Route Authorization Metadata', level: 2 },
       { id: 'matching-semantics', title: 'Matching Semantics: all / any / exact', level: 2 },
       { id: 'server-authorization', title: 'Server Authorization with requireAbility()', level: 2 },
@@ -1075,6 +1076,54 @@ const auth = useBearerAuth()
 
 These checks are **advisory UI logic only**. They decide whether to render a control — they do not protect the API call behind it. A user can always craft a request directly against your backend, which is why Laravel must re-check \`users.delete\` on \`DELETE /api/users/123\` regardless of what the UI rendered.
 
+## UI Authorization: &lt;Can&gt; and &lt;Cannot&gt;
+
+Two auto-imported components mirror \`can()\`/\`cannot()\` declaratively. Both share one pure evaluator and the same exact-match, \`all\`/\`any\` semantics as route metadata and \`requireAbility()\`:
+
+\`\`\`vue
+<template>
+  <!-- single ability -->
+  <Can ability="users.delete">Delete</Can>
+
+  <!-- every listed ability (default mode: "all") -->
+  <Can :abilities="['users.view', 'users.edit']">Edit</Can>
+
+  <!-- at least one listed ability -->
+  <Can :abilities="['reports.view', 'reports.export']" mode="any">
+    Export
+  </Can>
+
+  <!-- inverse rendering with optional fallback -->
+  <Cannot ability="users.delete">
+    <template #fallback>Request access</template>
+  </Cannot>
+</template>
+\`\`\`
+
+Props and slots:
+
+| Prop / Slot | Type | Behavior |
+| --- | --- | --- |
+| \`ability\` | \`string\` | Single required ability. Takes precedence over \`abilities\` when both are provided. |
+| \`abilities\` | \`string[]\` | Multiple required abilities, combined with \`mode\`. |
+| \`mode\` | \`'all' \| 'any'\` | Defaults to \`'all'\`: every listed ability must be held. \`'any'\` requires at least one. |
+| default slot | — | Rendered while the check passes (\`&lt;Can&gt;\`) or fails (\`&lt;Cannot&gt;\`). |
+| \`#fallback\` | — | Optional. Rendered instead of the default slot when the check denies. |
+
+Behavior:
+
+- Authorized renders the default slot; unauthorized renders the optional \`#fallback\` slot or nothing. Denied content is removed from the DOM, not CSS-hidden.
+- An empty \`abilities\` array — or no props at all — means "no restriction", identical to route metadata and server semantics.
+- \`&lt;Cannot&gt;\` is the exact negation of the same evaluation used by \`&lt;Can&gt;\` — there is no second matching algorithm.
+- Matching is exact string equality. Malformed props or malformed client authorization state fail closed; null or missing ability state can never satisfy a non-empty requirement.
+- Evaluation reacts to login, refresh, logout, and session replacement through the existing client authorization state. No second state store exists and nothing is fetched.
+- Server-rendered HTML matches hydration because evaluation is synchronous over the SSR-transferred state. In SPA-only rendering, guarded components briefly show the denied branch until the initial auth check resolves — pair with \`auth.ready\` for loading UX.
+- Disabled authorization has no special UI mode: extraction never runs, state stays \`null\`, so \`&lt;Can&gt;\` renders fallback/nothing, identical to \`can()\`.
+
+**UI authorization controls rendering only. It never secures API requests. Your backend must authorize every request it receives.** Hiding a button does not authorize \`DELETE /api/users/123\` — Laravel still re-checks every request it receives.
+
+Directives such as \`v-can\` are intentionally not provided; components and \`can()\`/\`cannot()\` cover the same need with better typing and simpler SSR behavior.
+
 ## Route Authorization Metadata
 
 Any page can declare the abilities it requires via \`definePageMeta\`. The global \`bearer-auth\` route middleware enforces them:
@@ -1116,6 +1165,8 @@ Rules:
 - \`mode\` defaults to \`'all'\`: every listed ability must exist.
 - \`mode: 'any'\`: at least one listed ability must exist.
 - Matching is exact. Holding \`users.*\` does **not** satisfy \`users.view\`; holding \`users.view.edit\` does **not** satisfy \`users.view\`.
+- Holding \`role:admin\` does **not** implicitly grant \`users.delete\` or anything else — roles become ordinary ability strings during normalization, so only the exact strings held are ever matched.
+- An **empty requirement means unrestricted** everywhere: an empty \`abilities\` prop on \`&lt;Can&gt;\`/\`&lt;Cannot&gt;\`, an empty array in route metadata, and \`requireAbility(event, [])\` all allow access without checking abilities.
 
 ## Server Authorization with requireAbility()
 
@@ -1180,6 +1231,7 @@ Error payloads contain only a status code and generic message - never tokens, se
       { id: 'methods', title: 'Composable Methods', level: 2 },
       { id: 'server-api-routes', title: 'Built-in Server API Routes', level: 2 },
       { id: 'server-utilities', title: 'Server Utilities', level: 2 },
+      { id: 'ui-components', title: 'UI Authorization Components', level: 2 },
       { id: 'typescript-types', title: 'TypeScript Types', level: 2 },
       { id: 'public-type-exports', title: 'Public Type Exports', level: 2 },
       { id: 'testing', title: 'Testing Foundation', level: 2 },
@@ -1197,14 +1249,14 @@ const auth = useBearerAuth<CustomUser>()
 
 | Property | Type | Description |
 | :--- | :--- | :--- |
-| \`user\` | \`Ref<User \| null>\` | Current authenticated user profile object. |
-| \`status\` | \`Ref<AuthStatus>\` | \`'idle' \| 'loading' \| 'authenticated' \| 'unauthenticated'\`. |
-| \`ready\` | \`Ref<boolean>\` | \`true\` once initial auth check (SSR or client) has resolved. |
-| \`error\` | \`Ref<string \| null>\` | Last authentication error message string. |
-| \`abilities\` | \`Ref<string[] \| null>\` | Normalized ability strings hydrated from the server session; powers the advisory \`can()\` / \`cannot()\` checks. |
-| \`loading\` | \`ComputedRef<boolean>\` | Convenience computed shorthand for \`status.value === 'loading'\`. |
-| \`isAuthenticated\` | \`ComputedRef<boolean>\` | Convenience computed shorthand for \`status.value === 'authenticated'\`. |
-| \`serverReady\` | \`ComputedRef<Promise<void>>\` | Resolves when server-side auth hydration completes. Used internally by the global middleware. |
+| \`user\` | \`Ref&lt;User \| null&gt;\` | Current authenticated user profile object. |
+| \`status\` | \`Ref&lt;AuthStatus&gt;\` | \`'idle' \| 'loading' \| 'authenticated' \| 'unauthenticated'\`. |
+| \`ready\` | \`Ref&lt;boolean&gt;\` | \`true\` once initial auth check (SSR or client) has resolved. |
+| \`error\` | \`Ref&lt;string \| null&gt;\` | Last authentication error message string. |
+| \`abilities\` | \`Ref&lt;string[] \| null&gt;\` | Normalized ability strings hydrated from the server session; powers the advisory \`can()\` / \`cannot()\` checks. |
+| \`loading\` | \`ComputedRef&lt;boolean&gt;\` | Convenience computed shorthand for \`status.value === 'loading'\`. |
+| \`isAuthenticated\` | \`ComputedRef&lt;boolean&gt;\` | Convenience computed shorthand for \`status.value === 'authenticated'\`. |
+| \`serverReady\` | \`ComputedRef&lt;Promise&lt;void&gt;&gt;\` | Resolves when server-side auth hydration completes. Used internally by the global middleware. |
 
 ### Composable Methods
 
@@ -1299,6 +1351,31 @@ import {
 **\`requireAbility(event, abilities, mode?)\`** enforces authorization on top of authentication: it throws \`401 Unauthenticated\` when no session exists and \`403 Authorization required\` when the session lacks the required ability. It is imported from the server-only subpath \`nuxt-bearer-auth/server\` rather than \`#imports\` so it never reaches client bundles. See the [Authorization](/docs/authorization) guide.
 
 **\`callAuthApi(endpoint, options)\`** constructs an HTTP request to your backend using \`apiBaseUrl + endpoint\`. When an \`event\` is provided, it automatically retrieves the bearer token from the Redis session and injects it as an \`Authorization: Bearer\` header. The token is never passed through the browser.
+
+The \`nuxt-bearer-auth/server\` subpath also exports the supporting primitives \`requireAbility()\` builds on: \`normalizeAuthorizationData()\`, \`extractAuthorizationFromResponse()\`, and \`hasRequiredAbilities()\`. Treat \`requireAbility()\` as the primary API — the others are the same normalization and matching helpers the module uses internally, exported for custom enforcement code.
+
+## UI Authorization Components
+
+Two auto-imported components expose declarative authorization over the same client ability state that powers \`can()\`/\`cannot()\`. Full usage guidance lives in the [Authorization guide](/docs/authorization#ui-components).
+
+| Component | Renders its default slot when |
+| --- | --- |
+| \`&lt;Can&gt;\` | The current abilities satisfy the requirement. |
+| \`&lt;Cannot&gt;\` | They do not — the exact negation of \`&lt;Can&gt;\`, with no separate matching logic. |
+
+Shared props: \`ability?: string\` (single ability, wins over \`abilities\`), \`abilities?: string[]\` (evaluated with \`mode\`), and \`mode?: 'all' \| 'any'\` (default \`'all'\`). An optional \`#fallback\` slot renders when the check denies, and denied slot content is removed from the DOM. Evaluation is reactive to login, refresh, logout, and session replacement, deterministic across SSR and hydration, and fails closed on malformed props or malformed ability state. An empty requirement means unrestricted.
+
+\`\`\`vue
+<Can ability="users.delete">
+  <button>Delete user</button>
+
+  <template #fallback>
+    <span>You do not have permission to delete users.</span>
+  </template>
+</Can>
+\`\`\`
+
+Components control visibility only — they never secure API requests. Enforce authorization in Nitro handlers with \`requireAbility()\`, and always enforce it again on your backend.
 
 ## TypeScript Types
 
@@ -1425,10 +1502,10 @@ console.log(auth.user.value?.role)
 
 ## Testing Foundation
 
-\`nuxt-bearer-auth\` ships with a comprehensive automated test suite to give you confidence in the authentication foundation you are building on.
+\`nuxt-bearer-auth\` ships with a comprehensive automated test suite to give you confidence in the authentication and authorization foundation you are building on.
 
 **Test runner**: Vitest
-**Test results**: 13 test files · 125 tests · 125 passing (verified during the Phase 3 release audit)
+**Test results**: 15 test files · 163 tests · 163 passing (verified after the Phase 4 UI authorization release)
 
 The suite covers:
 
@@ -1442,6 +1519,8 @@ The suite covers:
 | \`authorization-normalization.test.ts\` | Abilities/roles/permissions normalization into sorted unique strings, disabled/missing configuration safety |
 | \`authorization-client.test.ts\` | Client ability synchronization across login/refresh/me, omission preservation, logout clearing stale abilities |
 | \`authorization-enforcement.test.ts\` | Server \`requireAbility()\` — 401 vs 403, all/any semantics, exact matching, fail-closed malformed session data, rejection of client-supplied state/headers/query |
+| \`authorization-ui-evaluator.test.ts\` | Pure Phase 4 evaluator — all/any modes, exact and case-sensitive matching, wildcard/prefix/role non-implication, empty requirements unrestricted, fail-closed malformed state and requirements, input immutability |
+| \`authorization-ui-components.test.ts\` | \`&lt;Can&gt;\`/\`&lt;Cannot&gt;\` component matrix — prop normalization and precedence, fallback slots, reactivity to login/logout/refresh, SSR determinism, fail-closed behavior |
 | \`ssr-plugin.test.ts\` | SSR hydration with valid session, unauthenticated SSR, Redis error resilience |
 | \`normalize.test.ts\` | Response path normalization for multiple backend response shapes |
 | \`paths.test.ts\` | JSON path traversal, \`$\` root selector, dot notation, null safety, URL interpolation |
